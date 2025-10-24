@@ -5,8 +5,8 @@ import uuid
 
 app = Flask(__name__)
 
-T3_COOKIE = "COOKIE HERE !!!!" # CHANGE THIS !!!!!
-MODEL = "gpt-5-chat"
+T3_COOKIE = "COOKIE HERE!!!" # this is serious mode. put the cookie here nOW!
+# models:
 # gpt-5-chat,
 # claude-4.5-haiku-reasoning,
 # etc (you can see the api model term in dev tools when u send a message in t3.chat)
@@ -37,45 +37,70 @@ def t3_req(messages, model, stream=False):
     
     r = requests.post("https://t3.chat/api/chat", headers=headers, json=payload, stream=True)
     
-    full_text = ""
+    textresp = ""
+    reasoningresp = ""
     for line in r.iter_lines():
-        if not line or not line.startswith(b"data: "): # t3.chat's response format cuz they do stream
+        if not line or not line.startswith(b"data: "): # t3.chat's response format cuz they do stream for good user experience
             continue
         try:
             data = json.loads(line[6:].decode("utf-8"))
-            if data.get("type") == "text-delta":
+            event_type = data.get("type")
+            
+            if event_type == "reasoning-delta": # this is the actual reasoning stuff in t3 chat api, it starts with reasoning start and ends with reasoning end
                 delta = data.get("delta", "")
-                full_text += delta
+                reasoningresp += delta
                 if stream:
-                    yield delta
+                    yield ("reasoning", delta)
+            elif event_type == "text-delta":
+                delta = data.get("delta", "")
+                textresp += delta
+                if stream:
+                    yield ("text", delta)
         except Exception:
             continue
     
     if not stream:
-        yield full_text
+        if reasoningresp:
+            textresp = f"<think>\n{reasoningresp}\n</think>\n\n{textresp}"
+        yield textresp
 
 @app.route('/v1/chat/completions', methods=['POST'])
 def chat_comp():
     data = request.json
     messages = data.get('messages', [])
-    model = data.get('model', MODEL)
+    model = data.get('model')
     stream = data.get('stream', False)
     
     if stream:
         def generate():
-            for chunk in t3_req(messages, model, stream=True):
-                response_chunk = {
-                    "choices": [{"delta": {"content": chunk}, "index": 0}],
-                    "model": model,
-                    "object": "text_completion.chunk"
-                }
-                yield f"data: {json.dumps(response_chunk)}\n\n"
+            reasoning_stream = ""
+            reasoning_sent = False
+            
+            for text_type, content in t3_req(messages, model, stream=True): # text type checks if its reasoning or text
+                if text_type == "reasoning":
+                    reasoning_stream += content
+                elif text_type == "text":
+                    if not reasoning_sent and reasoning_stream:
+                        fullresp_chunk = {
+                            "choices": [{"delta": {"content": f"<think>\n{reasoning_stream}\n</think>\n\n"}, "index": 0}],
+                            "model": model,
+                            "object": "text_completion.chunk"
+                        }
+                        yield f"data: {json.dumps(fullresp_chunk)}\n\n"
+                        reasoning_sent = True
+                    
+                    fullresp_chunk = {
+                        "choices": [{"delta": {"content": content}, "index": 0}],
+                        "model": model,
+                        "object": "text_completion.chunk"
+                    }
+                    yield f"data: {json.dumps(fullresp_chunk)}\n\n"
         
         return Response(generate(), mimetype='text/event-stream')
     else:
-        full_text = next(t3_req(messages, model, stream=False)) # next cuz of yields
+        textresp = next(t3_req(messages, model, stream=False)) # next cuz of yields
         return jsonify({
-            "choices": [{"message": {"content": full_text, "role": "assistant"}, "index": 0, "finish_reason": "stop"}],
+            "choices": [{"message": {"content": textresp, "role": "assistant"}, "index": 0, "finish_reason": "stop"}],
             "model": model,
             "object": "text_completion"
         })
