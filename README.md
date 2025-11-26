@@ -11,4 +11,4 @@
        
 ~~some software that use open ai compatible urls manage tools via the open ai api itself and some do tool usage manually via telling it to use xml tags etc.~~
 ~~the tool part of open ai's api is not in this currently.~~
-i dont think this works anymore cuz theo changed his cookie stuff
+  i dont think this works anymore cuz theo changed his cookie stuff
